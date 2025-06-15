@@ -40,11 +40,12 @@
     <div id="ticker-text">Connecting to Twitch chat...</div>
   </div>
 
-  <!-- Load tmi.js BEFORE using it -->
-  <script src="https://cdn.jsdelivr.net/npm/tmi.js@1.8.5/dist/tmi.min.js"></script>
+  <!-- ✅ WORKING CDN FOR GITHUB PAGES -->
+  <script src="https://cdn.jsdelivr.net/npm/tmi.js@1.8.5/dist/browser/tmi.min.js"></script>
+
   <script>
     const client = new tmi.Client({
-      channels: ['1Dustin2Gray'] // REPLACE THIS with your Twitch channel name
+      channels: ['1Dustin2Gray'] // replace this with your lowercase Twitch username
     });
 
     const messages = [];
