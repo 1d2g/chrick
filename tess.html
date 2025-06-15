@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>v5</title>
+<title>v6</title>
 <style>
   body {
     margin: 0;
@@ -57,43 +57,86 @@
   const ticker = document.getElementById('ticker');
   const separator = '\u00A0\u00A0\u00A0\u00A0'; // 4 non-breaking spaces
 
+  const BUFFER_SIZE = 20;
+  const MAX_HEADLINES = 5;
+  const HEADLINE_SLOTS = [0, 4, 8, 12, 16]; // evenly spaced indexes for headlines
+
+  // Circular buffer for displayed messages: each slot {text, type}
+  let displayBuffer = new Array(BUFFER_SIZE).fill(null);
+
+  // Current headlines & chat queues
   let headlines = [];
   let chatQueue = [];
-  let displayedMessages = [];
 
-  // Append new message to displayedMessages (removes old if too long)
-  function appendMessage(text, type) {
-    displayedMessages.push({ text, type });
-    if(displayedMessages.length > 50) displayedMessages.shift();
+  // Round robin index to replace chat messages (only chat slots)
+  // Slots not in HEADLINE_SLOTS are for chat messages
+  let chatSlots = [...Array(BUFFER_SIZE).keys()].filter(i => !HEADLINE_SLOTS.includes(i));
+  let chatReplaceIndex = 0;
+
+  // Buffer that holds chat messages waiting to enter displayBuffer on next loop
+  let chatIncoming = [];
+
+  // Store headlines to inject on next loop
+  let headlinesIncoming = [];
+
+  // Format a message safely with color span
+  function formatMessage(text, type) {
+    const safeText = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return `<span class="${type}">${safeText}</span>`;
   }
 
-  // Render the ticker text
-  function renderTicker() {
-    // Format all displayed messages with spans and join with separator
-    const html = displayedMessages.map(msg => {
-      const safeText = msg.text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-      return `<span class="${msg.type}">${safeText}</span>`;
+  // Build ticker string from displayBuffer with separators
+  function buildTickerHTML() {
+    return displayBuffer.map(slot => {
+      if (!slot) return ''; // empty slot, just space
+      return formatMessage(slot.text, slot.type);
     }).join(separator);
-    ticker.innerHTML = html;
   }
 
-  // Initially populate displayedMessages with headlines only
-  function initHeadlines() {
-    displayedMessages = headlines.map(h => ({ text: h, type: 'news' }));
+  // Render ticker with current buffer content
+  function renderTicker() {
+    ticker.innerHTML = buildTickerHTML();
+  }
+
+  // Update displayBuffer at end of animation loop with new data (headlines + chat)
+  function updateDisplayBuffer() {
+    // Update headlines first into their slots (only up to max headlines)
+    for (let i = 0; i < MAX_HEADLINES; i++) {
+      const slot = HEADLINE_SLOTS[i];
+      displayBuffer[slot] = headlinesIncoming[i]
+        ? { text: headlinesIncoming[i], type: 'news' }
+        : { text: '', type: 'news' };
+    }
+
+    // Replace chat slots with waiting chat messages from chatIncoming,
+    // cycling through chatSlots in round robin fashion
+    for (let i = 0; i < chatIncoming.length; i++) {
+      displayBuffer[chatSlots[chatReplaceIndex]] = { text: chatIncoming[i], type: 'chat' };
+      chatReplaceIndex = (chatReplaceIndex + 1) % chatSlots.length;
+    }
+    // Clear chatIncoming after applying
+    chatIncoming = [];
+
     renderTicker();
   }
 
-  // Inject chat messages smoothly, one at a time, every ~1.5s
-  function processChatQueue() {
-    if(chatQueue.length > 0) {
-      // Insert next chat message just offscreen by pushing to displayedMessages
-      appendMessage(chatQueue.shift(), 'chat');
-      renderTicker();
-    }
+  // Called periodically to trigger displayBuffer update at end of animation loop
+  function startTickerLoop() {
+    updateDisplayBuffer();
+    // Set interval to update again after full animation cycle
+    setTimeout(startTickerLoop, 39000); // 39 seconds = animation duration
   }
 
-  // Start interval to inject chat messages regularly
-  setInterval(processChatQueue, 1500);
+  // Handle new chat message: queue it for next buffer update
+  function addChatMessage(text) {
+    chatIncoming.push(text);
+  }
+
+  // Handle new headlines: store for next buffer update
+  function setHeadlines(newHeads) {
+    // Limit to max headlines
+    headlinesIncoming = newHeads.slice(0, MAX_HEADLINES);
+  }
 
   // Twitch chat setup
   const client = new tmi.Client({
@@ -103,12 +146,12 @@
   client.connect().catch(console.error);
 
   client.on('message', (channel, tags, message, self) => {
-    if(self) return;
+    if (self) return;
     const chatMsg = `${tags['display-name']}: ${message}`;
-    chatQueue.push(chatMsg);
+    addChatMessage(chatMsg);
   });
 
-  // Fetch NYT headlines & update headlines array
+  // Fetch NYT headlines & update headlinesIncoming array
   const feeds = [
     {
       name: "NYT Politics",
@@ -122,24 +165,31 @@
 
   async function fetchHeadlines() {
     let combined = [];
-    for(const feed of feeds) {
+    for (const feed of feeds) {
       try {
         const res = await fetch(feed.url);
         const data = await res.json();
-        const newHeads = data.items.slice(0,3).map(item => `${feed.name}: ${item.title}`);
+        const newHeads = data.items.slice(0, MAX_HEADLINES).map(item => `${feed.name}: ${item.title}`);
         combined = combined.concat(newHeads);
-      } catch(e) {
+      } catch (e) {
         console.error(`Error fetching ${feed.name}`, e);
       }
     }
-    headlines = combined;
-    initHeadlines();
+    setHeadlines(combined);
   }
+
+  // Initial setup: fill displayBuffer with empty messages so ticker is full length
+  for(let i=0; i<BUFFER_SIZE; i++) {
+    displayBuffer[i] = { text: '', type: 'news' };
+  }
+  renderTicker();
 
   fetchHeadlines();
   setInterval(fetchHeadlines, 5 * 60 * 1000);
 
-  // Start with loading message
+  startTickerLoop();
+
+  // Show loading before first full update
   ticker.innerHTML = '<span class="news">Connecting to Twitch chat and news...</span>';
 </script>
 
