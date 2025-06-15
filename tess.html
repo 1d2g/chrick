@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Smooth Twitch Chat + NYT Ticker</title>
+<title>v5</title>
 <style>
   body {
     margin: 0;
@@ -25,12 +25,11 @@
   .ticker-content {
     display: inline-block;
     white-space: nowrap;
-    color: white;
-    padding-left: 100%;
+    padding-left: 100%; /* start offscreen */
     animation-name: scroll-left;
     animation-timing-function: linear;
     animation-iteration-count: infinite;
-    animation-duration: 39s; /* slowed ~30% from 30s */
+    animation-duration: 39s; /* slowed ~30% */
   }
 
   @keyframes scroll-left {
@@ -38,150 +37,111 @@
     to { transform: translateX(-100%); }
   }
 
-  /* We'll duplicate ticker-content for seamless looping */
-  #ticker1 { color: white; }
-  #ticker2 { color: white; }
-
   .chat {
-    color: #00aaff; /* Blue for chat */
+    color: #00aaff; /* blue chat */
   }
 
   .news {
-    color: #ffffff; /* White for news */
+    color: #fff; /* white news */
   }
 </style>
 </head>
 <body>
 
-  <div class="ticker-container">
-    <div id="ticker1" class="ticker-content"></div>
-    <div id="ticker2" class="ticker-content"></div>
-  </div>
+<div class="ticker-container">
+  <div id="ticker" class="ticker-content"></div>
+</div>
 
-  <script src="tmi.min.js"></script>
-  <script>
-    const ticker1 = document.getElementById('ticker1');
-    const ticker2 = document.getElementById('ticker2');
+<script src="tmi.min.js"></script>
+<script>
+  const ticker = document.getElementById('ticker');
+  const separator = '\u00A0\u00A0\u00A0\u00A0'; // 4 non-breaking spaces
 
-    const separator = '\u00A0\u00A0\u00A0\u00A0'; // 4 non-breaking spaces (tab length)
+  let headlines = [];
+  let chatQueue = [];
+  let displayedMessages = [];
 
-    // Maintain two queues: chatMessages and headlines
-    let chatMessages = [];
-    let headlines = [];
+  // Append new message to displayedMessages (removes old if too long)
+  function appendMessage(text, type) {
+    displayedMessages.push({ text, type });
+    if(displayedMessages.length > 50) displayedMessages.shift();
+  }
 
-    // Queue to hold messages ready to display, applying ratio prioritization
-    let displayQueue = [];
+  // Render the ticker text
+  function renderTicker() {
+    // Format all displayed messages with spans and join with separator
+    const html = displayedMessages.map(msg => {
+      const safeText = msg.text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      return `<span class="${msg.type}">${safeText}</span>`;
+    }).join(separator);
+    ticker.innerHTML = html;
+  }
 
-    // Ratios
-    const chatToHeadlineRatio = 5; // Show 5 chat messages per 1 headline if possible
+  // Initially populate displayedMessages with headlines only
+  function initHeadlines() {
+    displayedMessages = headlines.map(h => ({ text: h, type: 'news' }));
+    renderTicker();
+  }
 
-    // Append text as HTML spans
-    function formatMessage(text, type) {
-      const cls = (type === 'chat') ? 'chat' : 'news';
-      // Escape HTML entities to prevent XSS
-      const safeText = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-      return `<span class="${cls}">${safeText}</span>`;
+  // Inject chat messages smoothly, one at a time, every ~1.5s
+  function processChatQueue() {
+    if(chatQueue.length > 0) {
+      // Insert next chat message just offscreen by pushing to displayedMessages
+      appendMessage(chatQueue.shift(), 'chat');
+      renderTicker();
     }
+  }
 
-    // Build the displayQueue applying chat:headline ratio
-    function buildDisplayQueue() {
-      displayQueue = [];
-      let chatIndex = 0;
-      let headlineIndex = 0;
+  // Start interval to inject chat messages regularly
+  setInterval(processChatQueue, 1500);
 
-      // While we have any messages
-      while (chatIndex < chatMessages.length || headlineIndex < headlines.length) {
-        // Add up to chatToHeadlineRatio chat messages if available
-        for(let i=0; i < chatToHeadlineRatio && chatIndex < chatMessages.length; i++) {
-          displayQueue.push({ text: chatMessages[chatIndex], type: 'chat' });
-          chatIndex++;
-        }
-        // Add one headline if available
-        if (headlineIndex < headlines.length) {
-          displayQueue.push({ text: headlines[headlineIndex], type: 'news' });
-          headlineIndex++;
-        }
+  // Twitch chat setup
+  const client = new tmi.Client({
+    channels: ['1dustin2gray']
+  });
+
+  client.connect().catch(console.error);
+
+  client.on('message', (channel, tags, message, self) => {
+    if(self) return;
+    const chatMsg = `${tags['display-name']}: ${message}`;
+    chatQueue.push(chatMsg);
+  });
+
+  // Fetch NYT headlines & update headlines array
+  const feeds = [
+    {
+      name: "NYT Politics",
+      url: "https://api.rss2json.com/v1/api.json?rss_url=https://rss.nytimes.com/services/xml/rss/nyt/Politics.xml"
+    },
+    {
+      name: "NYT World",
+      url: "https://api.rss2json.com/v1/api.json?rss_url=https://rss.nytimes.com/services/xml/rss/nyt/World.xml"
+    }
+  ];
+
+  async function fetchHeadlines() {
+    let combined = [];
+    for(const feed of feeds) {
+      try {
+        const res = await fetch(feed.url);
+        const data = await res.json();
+        const newHeads = data.items.slice(0,3).map(item => `${feed.name}: ${item.title}`);
+        combined = combined.concat(newHeads);
+      } catch(e) {
+        console.error(`Error fetching ${feed.name}`, e);
       }
-      // If no chat messages, just add headlines as is
-      if (chatMessages.length === 0) {
-        displayQueue = headlines.map(h => ({ text: h, type: 'news' }));
-      }
     }
+    headlines = combined;
+    initHeadlines();
+  }
 
-    // Renders displayQueue content into ticker1 and ticker2 for seamless scroll
-    function renderTickers() {
-      const htmlContent = displayQueue.map(m => formatMessage(m.text, m.type)).join(separator);
-      ticker1.innerHTML = htmlContent;
-      ticker2.innerHTML = htmlContent;
-    }
+  fetchHeadlines();
+  setInterval(fetchHeadlines, 5 * 60 * 1000);
 
-    // Append a new chat message
-    function addChatMessage(text) {
-      chatMessages.push(text);
-      if (chatMessages.length > 50) chatMessages.shift(); // keep max history
-      rebuildAndRender();
-    }
+  // Start with loading message
+  ticker.innerHTML = '<span class="news">Connecting to Twitch chat and news...</span>';
+</script>
 
-    // Append new headlines (replace old headlines)
-    function setHeadlines(newHeadlines) {
-      headlines = newHeadlines;
-      rebuildAndRender();
-    }
-
-    // Rebuild the display queue and render tickers
-    function rebuildAndRender() {
-      buildDisplayQueue();
-      renderTickers();
-    }
-
-    // Setup Twitch chat client
-    const client = new tmi.Client({
-      channels: ['1dustin2gray']
-    });
-
-    client.connect().catch(console.error);
-
-    client.on('message', (channel, tags, message, self) => {
-      if(self) return;
-      const chatMsg = `${tags['display-name']}: ${message}`;
-      addChatMessage(chatMsg);
-    });
-
-    // NYT RSS Feeds proxied
-    const feeds = [
-      {
-        name: "NYT Politics",
-        url: "https://api.rss2json.com/v1/api.json?rss_url=https://rss.nytimes.com/services/xml/rss/nyt/Politics.xml"
-      },
-      {
-        name: "NYT World",
-        url: "https://api.rss2json.com/v1/api.json?rss_url=https://rss.nytimes.com/services/xml/rss/nyt/World.xml"
-      }
-    ];
-
-    async function fetchHeadlines() {
-      let combined = [];
-      for (const feed of feeds) {
-        try {
-          const res = await fetch(feed.url);
-          const data = await res.json();
-          const headlines = data.items.slice(0, 3).map(item => `${feed.name}: ${item.title}`);
-          combined = combined.concat(headlines);
-        } catch (e) {
-          console.error(`Error fetching ${feed.name}`, e);
-        }
-      }
-      setHeadlines(combined);
-    }
-
-    // Initial fetch & repeat every 5 minutes
-    fetchHeadlines();
-    setInterval(fetchHeadlines, 5 * 60 * 1000);
-
-    // Start with empty ticker text
-    ticker1.innerHTML = 'Connecting to Twitch chat and news...';
-    ticker2.innerHTML = ticker1.innerHTML;
-
-  </script>
 </body>
 </html>
