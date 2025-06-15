@@ -32,6 +32,14 @@
       from { transform: translateX(0); }
       to { transform: translateX(-100%); }
     }
+
+    .chat {
+      color: #00aaff; /* Blue for chat */
+    }
+
+    .news {
+      color: #ffffff; /* White for news */
+    }
   </style>
 </head>
 <body>
@@ -44,19 +52,23 @@
 
   <script>
     const client = new tmi.Client({
-      channels: ['1dustin2gray'] // your Twitch channel
+      channels: ['1dustin2gray']
     });
 
     const messages = [];
     const ticker = document.getElementById('ticker-text');
+    const separator = '&nbsp;&nbsp;&nbsp;&nbsp;'; // Tab-like spacing
 
     function updateTicker() {
-      ticker.textContent = messages.join('   •   ');
+      // Rebuild ticker HTML from message array
+      ticker.innerHTML = messages.map(msg => {
+        return `<span class="${msg.type}">${msg.text}</span>`;
+      }).join(separator);
     }
 
-    function addMessage(msg) {
-      messages.push(msg);
-      if (messages.length > 20) messages.shift(); // Keep total count low for performance
+    function addMessage(text, type = 'chat') {
+      messages.push({ text, type });
+      if (messages.length > 20) messages.shift();
       updateTicker();
     }
 
@@ -64,10 +76,9 @@
 
     client.on('message', (channel, tags, message, self) => {
       const chatMsg = `${tags['display-name']}: ${message}`;
-      addMessage(chatMsg);
+      addMessage(chatMsg, 'chat');
     });
 
-    // NYT RSS Feed URLs (proxied through rss2json)
     const feeds = [
       {
         name: "NYT Politics",
@@ -85,14 +96,13 @@
           const res = await fetch(feed.url);
           const data = await res.json();
           const headlines = data.items.slice(0, 3).map(item => `${feed.name}: ${item.title}`);
-          headlines.forEach(h => addMessage(h));
+          headlines.forEach(h => addMessage(h, 'news'));
         } catch (e) {
           console.error(`Error fetching ${feed.name}`, e);
         }
       }
     }
 
-    // Fetch news every 5 minutes, and immediately on load
     fetchHeadlines();
     setInterval(fetchHeadlines, 5 * 60 * 1000);
   </script>
