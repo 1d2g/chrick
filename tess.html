@@ -1,84 +1,153 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>Twitch Chat + NYT Ticker</title>
-  <style>
-    body {
-      margin: 0;
-      background-color: #000;
-      font-family: Arial, sans-serif;
-      color: white;
-    }
+<meta charset="UTF-8" />
+<title>Smooth Twitch Chat + NYT Ticker</title>
+<style>
+  body {
+    margin: 0;
+    background-color: #000;
+    font-family: Arial, sans-serif;
+    color: white;
+  }
 
-    .ticker {
-      position: fixed;
-      bottom: 0;
-      width: 100%;
-      height: 40px;
-      background: #111;
-      overflow: hidden;
-      display: flex;
-      align-items: center;
-    }
+  .ticker-container {
+    position: fixed;
+    bottom: 0;
+    width: 100%;
+    height: 40px;
+    background: #111;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+  }
 
-    #ticker-text {
-      white-space: nowrap;
-      animation: scroll-left 30s linear infinite;
-      padding-left: 100%;
-    }
+  .ticker-content {
+    display: inline-block;
+    white-space: nowrap;
+    color: white;
+    padding-left: 100%;
+    animation-name: scroll-left;
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+    animation-duration: 39s; /* slowed ~30% from 30s */
+  }
 
-    @keyframes scroll-left {
-      from { transform: translateX(0); }
-      to { transform: translateX(-100%); }
-    }
+  @keyframes scroll-left {
+    from { transform: translateX(0); }
+    to { transform: translateX(-100%); }
+  }
 
-    .chat {
-      color: #00aaff; /* Blue for chat */
-    }
+  /* We'll duplicate ticker-content for seamless looping */
+  #ticker1 { color: white; }
+  #ticker2 { color: white; }
 
-    .news {
-      color: #ffffff; /* White for news */
-    }
-  </style>
+  .chat {
+    color: #00aaff; /* Blue for chat */
+  }
+
+  .news {
+    color: #ffffff; /* White for news */
+  }
+</style>
 </head>
 <body>
 
-  <div class="ticker">
-    <div id="ticker-text">Connecting to Twitch chat and news...</div>
+  <div class="ticker-container">
+    <div id="ticker1" class="ticker-content"></div>
+    <div id="ticker2" class="ticker-content"></div>
   </div>
 
   <script src="tmi.min.js"></script>
-
   <script>
+    const ticker1 = document.getElementById('ticker1');
+    const ticker2 = document.getElementById('ticker2');
+
+    const separator = '\u00A0\u00A0\u00A0\u00A0'; // 4 non-breaking spaces (tab length)
+
+    // Maintain two queues: chatMessages and headlines
+    let chatMessages = [];
+    let headlines = [];
+
+    // Queue to hold messages ready to display, applying ratio prioritization
+    let displayQueue = [];
+
+    // Ratios
+    const chatToHeadlineRatio = 5; // Show 5 chat messages per 1 headline if possible
+
+    // Append text as HTML spans
+    function formatMessage(text, type) {
+      const cls = (type === 'chat') ? 'chat' : 'news';
+      // Escape HTML entities to prevent XSS
+      const safeText = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      return `<span class="${cls}">${safeText}</span>`;
+    }
+
+    // Build the displayQueue applying chat:headline ratio
+    function buildDisplayQueue() {
+      displayQueue = [];
+      let chatIndex = 0;
+      let headlineIndex = 0;
+
+      // While we have any messages
+      while (chatIndex < chatMessages.length || headlineIndex < headlines.length) {
+        // Add up to chatToHeadlineRatio chat messages if available
+        for(let i=0; i < chatToHeadlineRatio && chatIndex < chatMessages.length; i++) {
+          displayQueue.push({ text: chatMessages[chatIndex], type: 'chat' });
+          chatIndex++;
+        }
+        // Add one headline if available
+        if (headlineIndex < headlines.length) {
+          displayQueue.push({ text: headlines[headlineIndex], type: 'news' });
+          headlineIndex++;
+        }
+      }
+      // If no chat messages, just add headlines as is
+      if (chatMessages.length === 0) {
+        displayQueue = headlines.map(h => ({ text: h, type: 'news' }));
+      }
+    }
+
+    // Renders displayQueue content into ticker1 and ticker2 for seamless scroll
+    function renderTickers() {
+      const htmlContent = displayQueue.map(m => formatMessage(m.text, m.type)).join(separator);
+      ticker1.innerHTML = htmlContent;
+      ticker2.innerHTML = htmlContent;
+    }
+
+    // Append a new chat message
+    function addChatMessage(text) {
+      chatMessages.push(text);
+      if (chatMessages.length > 50) chatMessages.shift(); // keep max history
+      rebuildAndRender();
+    }
+
+    // Append new headlines (replace old headlines)
+    function setHeadlines(newHeadlines) {
+      headlines = newHeadlines;
+      rebuildAndRender();
+    }
+
+    // Rebuild the display queue and render tickers
+    function rebuildAndRender() {
+      buildDisplayQueue();
+      renderTickers();
+    }
+
+    // Setup Twitch chat client
     const client = new tmi.Client({
       channels: ['1dustin2gray']
     });
 
-    const messages = [];
-    const ticker = document.getElementById('ticker-text');
-    const separator = '&nbsp;&nbsp;&nbsp;&nbsp;'; // Tab-like spacing
-
-    function updateTicker() {
-      // Rebuild ticker HTML from message array
-      ticker.innerHTML = messages.map(msg => {
-        return `<span class="${msg.type}">${msg.text}</span>`;
-      }).join(separator);
-    }
-
-    function addMessage(text, type = 'chat') {
-      messages.push({ text, type });
-      if (messages.length > 20) messages.shift();
-      updateTicker();
-    }
-
     client.connect().catch(console.error);
 
     client.on('message', (channel, tags, message, self) => {
+      if(self) return;
       const chatMsg = `${tags['display-name']}: ${message}`;
-      addMessage(chatMsg, 'chat');
+      addChatMessage(chatMsg);
     });
 
+    // NYT RSS Feeds proxied
     const feeds = [
       {
         name: "NYT Politics",
@@ -91,20 +160,28 @@
     ];
 
     async function fetchHeadlines() {
+      let combined = [];
       for (const feed of feeds) {
         try {
           const res = await fetch(feed.url);
           const data = await res.json();
           const headlines = data.items.slice(0, 3).map(item => `${feed.name}: ${item.title}`);
-          headlines.forEach(h => addMessage(h, 'news'));
+          combined = combined.concat(headlines);
         } catch (e) {
           console.error(`Error fetching ${feed.name}`, e);
         }
       }
+      setHeadlines(combined);
     }
 
+    // Initial fetch & repeat every 5 minutes
     fetchHeadlines();
     setInterval(fetchHeadlines, 5 * 60 * 1000);
+
+    // Start with empty ticker text
+    ticker1.innerHTML = 'Connecting to Twitch chat and news...';
+    ticker2.innerHTML = ticker1.innerHTML;
+
   </script>
 </body>
 </html>
