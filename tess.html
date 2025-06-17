@@ -148,7 +148,7 @@
 
   client.on('message', (channel, tags, message, self) => {
     if (self) return;
-    const chatMsg = `${tags['display-name']}: ${message.substring(0,20)}`;
+    const chatMsg = `${tags['display-name']}: ${message.substring(0,40)}`;
     addChatMessage(chatMsg);
   });
 
